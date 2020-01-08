@@ -86,6 +86,10 @@ class alexaBridge(sofabase):
                 self.grant=self.load_cache('alexagrant')
             except:
                 self.grant={}
+                
+            if 'code' not in self.grant:
+                self.grant['code']=self.dataset.config['grant_code']
+                
             if 'expires' in self.grant:
                 self.grant['expires']=datetime.datetime.strptime(self.grant['expires'].split('.')[0], '%Y-%m-%dT%H:%M:%S') 
             else:
@@ -340,7 +344,7 @@ class alexaBridge(sofabase):
                     elif self.tokenRefresh or ('expires' in self.grant and datetime.datetime.now()>self.grant["expires"]):
                         await self.alexaRefreshToken()
                 except:
-                    self.log.info('Token refresh probably needed but failed', exc_info=True)
+                    self.log.info('.. Token refresh probably needed but failed', exc_info=True)
                     
                 try:
                     if response["event"]["header"]['name']=='StateReport':
@@ -355,16 +359,16 @@ class alexaBridge(sofabase):
                     self.log.info('<- response/%s %s' % (sqsbody["directive"]["header"]["messageId"], response), exc_info=True)
                 
             except:
-                self.log.error('Error in handleSQSMessage', exc_info=True)
+                self.log.error('!! Error in handleSQSMessage', exc_info=True)
   
         
         async def connectQueue(self):
 
             while not self.sqsconnected:
-                self.log.info('Trying to connect to queue...')
+                self.log.info('.. Trying to connect to queue')
                 try:
                     self.sofaqueue=await self.connectSQSqueue('sofa')
-                    self.log.info('Connected to queue.')
+                    self.log.info('.. Connected to queue.')
                     #self.lambdaqueue=await self.connectSQSqueue('sofalambda')
                     if self.sofaqueue!=None: #and self.lambdaqueue!=None:
                         self.sqsconnected=True
@@ -561,12 +565,14 @@ class alexaBridge(sofabase):
                 self.tokenRefresh=False
                 self.log.info('New grant data: %s' % self.grant)
             except:
-                self.log.error('Error refreshing token: %s' % tokenresponse, exc_info=True)
+                self.log.error('!! Error refreshing token: %s' % tokenresponse, exc_info=True)
+                await self.alexaGetTokenForNewGrant()
 
 
         async def alexaGetTokenForNewGrant(self):
             
             try:
+                self.log.info('.. starting getTokenForNewGrant')
                 url="https://api.amazon.com/auth/o2/token"
                 headers = { "Content-type": "application/x-www-form-urlencoded;charset=UTF-8" }
 
@@ -593,7 +599,7 @@ class alexaBridge(sofabase):
                 self.newGrant=False
                 self.log.info('New grant data: %s' % self.grant)
             except:
-                self.log.error('Error refreshing token', exc_info=True)
+                self.log.error('!! Error getting token for new grant', exc_info=True)
 
         async def alexaAcceptGrant(self, message):
             
