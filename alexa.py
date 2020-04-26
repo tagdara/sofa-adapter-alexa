@@ -676,7 +676,7 @@ class alexaBridge(sofabase):
                                     else:
                                         alexadev=True
                                     if 'configuration' in cap:
-                                        for config in cap['configuration']:
+                                        for config in dict(cap['configuration']):
                                             # This allows for configuration items to be defined in sofa but blocked
                                             # because they are not defined or accepted in the official Alexa spec
                                             # One example is a range for a thermostat
