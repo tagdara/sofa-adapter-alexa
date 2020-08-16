@@ -5,8 +5,7 @@ import sys, os
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__),'../../base'))
 
-from sofabase import sofabase
-from sofabase import adapterbase
+from sofabase import sofabase, adapterbase, configbase
 import devices
 from sofacollector import SofaCollector
 from concurrent.futures import ThreadPoolExecutor
@@ -26,10 +25,28 @@ import aiohttp
 # This needs to be closely reworked, probably with AIOBOTOCORE https://github.com/aio-libs/aiobotocore
 
 class alexaBridge(sofabase):
+    
+    class adapter_config(configbase):
+    
+        def adapter_fields(self):
+            self.region_name=self.set_or_default('region_name', mandatory=True)
+            self.grant_code=self.set_or_default('grant_code', mandatory=True)
+            self.aws_secret_access_key=self.set_or_default('aws_secret_access_key', mandatory=True)
+            self.aws_access_key_id=self.set_or_default('aws_access_key_id', mandatory=True)
+            self.alexa_skill_client_id=self.set_or_default('alexa_skill_client_id', mandatory=True)
+            self.excluded_devices=self.set_or_default("excluded_devices", default=[])
+            self.allowed_types=self.set_or_default("allowed_types", default=[])
+            self.blocked_config=self.set_or_default("blocked_config", default=[])
+            self.alexa_skill_client_secret=self.set_or_default("alexa_skill_client_secret", mandatory=True)
 
     class adapterProcess(SofaCollector.collectorAdapter):
+        
+        @property
+        def collector_categories(self):
+            return ['ALL']    
     
-        def __init__(self, log=None, loop=None, dataset=None, notify=None, request=None, **kwargs):
+        def __init__(self, log=None, loop=None, dataset=None, notify=None, request=None, config=None, **kwargs):
+            self.config=config
             self.dataset=dataset
             self.dataset.nativeDevices['scene']={}
             self.dataset.nativeDevices['activity']={}
@@ -88,7 +105,7 @@ class alexaBridge(sofabase):
                 self.grant={}
                 
             if 'code' not in self.grant:
-                self.grant['code']=self.dataset.config['grant_code']
+                self.grant['code']=self.config.grant_code
                 
             if 'expires' in self.grant:
                 self.grant['expires']=datetime.datetime.strptime(self.grant['expires'].split('.')[0], '%Y-%m-%dT%H:%M:%S') 
@@ -98,9 +115,9 @@ class alexaBridge(sofabase):
             self.log.info('.. Starting Alexa Bridge')
             try:
                 session = aiobotocore.get_session(loop=self.loop)
-                self.sqs = session.create_client('sqs', region_name=self.dataset.config["region_name"],
-                                   aws_secret_access_key=self.dataset.config["aws_secret_access_key"],
-                                   aws_access_key_id=self.dataset.config["aws_access_key_id"])
+                self.sqs = session.create_client('sqs', region_name=self.config.region_name,
+                                   aws_secret_access_key=self.config.aws_secret_access_key,
+                                   aws_access_key_id=self.config.aws_access_key_id)
 
                 await self.connectSQSqueue('sofa')
                 await self.pollSQSlong()
@@ -109,7 +126,7 @@ class alexaBridge(sofabase):
                 self.log.error('Error loading cached devices', exc_info=True)
 
                 
-        async def processSQS(self,event,returnqueue):
+        async def processSQS(self, event, returnqueue):
         
             #self.log.info('Starting process SQS for %s' % str(event))
         
@@ -149,18 +166,23 @@ class alexaBridge(sofabase):
                                 await self.SQSearlyResponse(response, returnqueue)
                             
                             response=await self.dataset.sendDirectiveToAdapter(event)
-                            try:
-                                if 'properties' in response['context']:
-                                    response['context']['properties']=self.trimProps(response['context']['properties'])
-                            except:
-                                self.log.error('Error trimming properties from response: %s' % response, exc_info=True)
-
-                            if 'correlationToken' in event["directive"]["header"] and response:
-                                if response['event']['header']['name']!='Response':
-                                    response=await self.convertChangeToResponse(response)
-                                response['event']['header']['correlationToken']=event["directive"]["header"]['correlationToken']
-                                response['event']['endpoint']['scope']=event["directive"]["endpoint"]['scope']
-                                #self.log.info('Response: %s' % response)
+                            
+                            if response:
+                                try:
+                                    if 'context' in response:
+                                        if 'properties' in response['context']:
+                                            response['context']['properties']=self.trimProps(response['context']['properties'])
+                                except:
+                                    self.log.error('Error trimming properties from response: %s' % response, exc_info=True)
+    
+                                if 'correlationToken' in event["directive"]["header"] and response:
+                                    if response['event']['header']['name']!='Response':
+                                        response=await self.convertChangeToResponse(response)
+                                    response['event']['header']['correlationToken']=event["directive"]["header"]['correlationToken']
+                                    response['event']['endpoint']['scope']=event["directive"]["endpoint"]['scope']
+                            else:
+                                self.log.info('!! no adapter response to %s' % event)
+                                
                             return response
 
                         #{'directive': {'endpoint': {'endpointId': 'hue:lights:16', 'cookie': {}, 'scope': {'type': 'BearerToken'}}, 'header': {'messageId': '296fb949-a51d-44fc-9240-28fc4f3efd3e', 'payloadVersion': '3', 'name': 'ReportState', 'namespace': 'Alexa'}, 'payload': {}}}
@@ -325,7 +347,7 @@ class alexaBridge(sofabase):
                 self.log.error('Error in handleSQSMessage', exc_info=True)
 
 
-        async def handleSQSmessage(self,sqsbody):
+        async def handleSQSmessage(self, sqsbody):
         
             try:
                 #sqsbody=json.loads(msg.body)
@@ -351,13 +373,15 @@ class alexaBridge(sofabase):
                         self.log.info('<- %s/%s %s %s' % (response["event"]["header"]['name'], response["event"]["endpoint"]['endpointId'], qid, self.suppressTokens(response)))
                     elif response["event"]["header"]['name'].startswith('Discover'):
                         self.log.info('<- %s %s %s' % (response["event"]["header"]['name'], qid, self.suppressTokens(response)))
+                        # self.log.info('FULL: %s' % json.dumps(response))
                     elif "context" in response and "properties" in response["context"]:
                         self.log.info('<- %s %s/%s %s' % (qid, response["context"]["properties"][0]["name"], sqsbody["directive"]["header"]["messageId"], self.suppressTokens(response)))
                     else:
                         self.log.info('<- response/%s %s' % (sqsbody["directive"]["header"]["messageId"], response))
                 except:
                     self.log.info('<- response/%s %s' % (sqsbody["directive"]["header"]["messageId"], response), exc_info=True)
-                
+            except botocore.errorfactory.QueueDoesNotExist:
+                self.log.error('!! Error in handleSQSMessage - queue does not exist: %s' % returnqueue, exc_info=True)
             except:
                 self.log.error('!! Error in handleSQSMessage', exc_info=True)
   
@@ -453,7 +477,7 @@ class alexaBridge(sofabase):
             
             try:
                 if change['namespace']=='Alexa.ContactSensor':
-                    self.log.info('Contact Sensor Change report: %s %s' % (deviceId, change))
+                    #self.log.info('.. Contact Sensor Change report: %s %s' % (deviceId, change))
                     changereport=await self.buildVirtualChangeReport(deviceId, change)
                     await self.alexaSendToEventGateway(changereport)
                     
@@ -522,7 +546,7 @@ class alexaBridge(sofabase):
                 url="https://api.amazonalexa.com/v3/events"
                 headers = { "Content-type": "application/json", "Authorization": "Bearer %s" % self.grant['access_token'] }
 
-                self.log.debug('Sending to alexa event gateway: %s' % body)
+                self.log.info('>> event gateway: %s' % body)
 
                 async with aiohttp.ClientSession() as client:
                     response=await client.post(url, data=json.dumps(body), headers=headers)
@@ -547,8 +571,8 @@ class alexaBridge(sofabase):
                 data = aiohttp.FormData()
                 data.add_field("grant_type", "refresh_token")
                 data.add_field("refresh_token", self.grant["refresh_token"])
-                data.add_field("client_id", self.dataset.config["alexa_skill_client_id"])
-                data.add_field("client_secret", self.dataset.config["alexa_skill_client_secret"])
+                data.add_field("client_id", self.config.alexa_skill_client_id)
+                data.add_field("client_secret", self.config.alexa_skill_client_secret)
                 #data.add_field("code", self.grant["code"])
 
                 async with aiohttp.ClientSession() as client:
@@ -579,8 +603,8 @@ class alexaBridge(sofabase):
                 data = aiohttp.FormData()
                 data.add_field("grant_type", "authorization_code")
                 data.add_field("code", self.grant["code"])
-                data.add_field("client_id", self.dataset.config["alexa_skill_client_id"])
-                data.add_field("client_secret", self.dataset.config["alexa_skill_client_secret"])
+                data.add_field("client_id", self.config.alexa_skill_client_id)
+                data.add_field("client_secret", self.config.alexa_skill_client_secret)
 
                 async with aiohttp.ClientSession() as client:
                     response=await client.post(url, data=data, headers=headers)
@@ -663,16 +687,17 @@ class alexaBridge(sofabase):
                 alexadevs=[]
                 for dev in self.dataset.devices:
                     try:
-                        if dev in self.dataset.config['excluded_devices']:
+                        #self.log.info('Processing: %s' %  self.dataset.devices[dev]['endpointId'])
+                        if dev in self.config.excluded_devices:
                             alexadev=False
                         else:
-                            if self.dataset.devices[dev]['displayCategories'][0] in self.dataset.config['allowed_types']:
+                            if self.dataset.devices[dev]['displayCategories'][0] in self.config.allowed_types:
                                 alexadev=False
                                 adev=copy.deepcopy(self.dataset.devices[dev])
                                 for cap in self.dataset.devices[dev]['capabilities']:
                                     if not cap['interface'].startswith('Alexa'):
                                         adev['capabilities'].remove(cap)
-                                        self.log.info('Trimmed non-alexa cap: %s' % cap)
+                                        self.log.debug('.. trimmed non-alexa cap from device: %s %s' % (dev,cap))
                                     else:
                                         alexadev=True
                                     if 'configuration' in cap:
@@ -680,11 +705,13 @@ class alexaBridge(sofabase):
                                             # This allows for configuration items to be defined in sofa but blocked
                                             # because they are not defined or accepted in the official Alexa spec
                                             # One example is a range for a thermostat
-                                            if config in self.dataset.config['blocked_config']:
+                                            if config in self.config.blocked_config:
                                                 del cap['configuration'][config]
                                 if alexadev:
-                                    self.log.info('Discovered device: %s %s' % (dev, adev))
+                                    #self.log.info('Discovered device: %s %s' % (dev, adev))
                                     alexadevs.append(adev)
+                            else:
+                                self.log.debug('.. skipping device from non-allowed type: %s / %s' % (dev, self.dataset.devices[dev]['displayCategories'][0] ))
                     except:
                         self.log.error('Error processing device: %s' % dev, exc_info=True)
                 self.log.info('Returning %s Alexa devices' % len(alexadevs) )
