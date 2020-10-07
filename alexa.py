@@ -46,20 +46,12 @@ class alexaBridge(sofabase):
             return ['ALL']    
     
         def __init__(self, log=None, loop=None, dataset=None, notify=None, request=None, config=None, **kwargs):
-            self.config=config
-            self.dataset=dataset
+            super().__init__(log=log, loop=loop, dataset=dataset, config=config)
             self.dataset.nativeDevices['scene']={}
             self.dataset.nativeDevices['activity']={}
             self.messagepool = ThreadPoolExecutor(10)
-
-            #self.definitions=definitions.Definitions
-            self.log=log
             self.notify=notify
             self.running=True
-            if not loop:
-                self.loop = asyncio.new_event_loop()
-            else:
-                self.loop=loop
                 
         def suppressTokens(self, oldlogmessage):
 
