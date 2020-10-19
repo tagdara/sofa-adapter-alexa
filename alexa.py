@@ -18,6 +18,7 @@ import datetime
 import uuid
 import asyncio
 import aiobotocore
+import botocore # Needed for logging exceptions only
 import time
 import copy
 import aiohttp
@@ -454,16 +455,18 @@ class alexaBridge(sofabase):
             except:
                 self.log.error('Error getting virtual controller types for %s' % itempath, exc_info=True)
 
-        async def virtualEventHandler(self, event, source, deviceId, message):
-            
+
+        async def process_remote_event(self, endpointId, event, message):
+            # Called by handleAlexaEvent in the collector adapter base
             try:
                 if event=='DoorbellPress':
-                    self.log.info('Doorbell Press: %s %s' % (deviceId, message))
+                    self.log.info('Doorbell Press: %s %s' % (endpointId, message))
                     await self.alexaSendToEventGateway(message)
                 else:
-                    self.log.info('Unknown event: %s %s %s' % (event, deviceId, message))
+                    self.log.info('Unknown event: %s %s %s' % (endpointId, event, message))
             except:
-                self.log.error('Error in virtual event handler: %s %s %s' % (event, deviceId, message), exc_info=True)
+                self.log.error('Error in virtual event handler: %s %s %s' % (endpointId, event, message), exc_info=True)
+
 
         async def virtualChangeHandler(self, deviceId, change):
             
@@ -475,6 +478,7 @@ class alexaBridge(sofabase):
                     
             except:
                 self.log.error('Error in virtual change handler: %s %s' % (deviceId, change), exc_info=True)
+
 
         async def buildVirtualChangeReport(self, deviceId, change):
             
